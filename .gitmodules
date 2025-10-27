@@ -1,0 +1,3 @@
+[submodule "apps/NeuralFusionCore"]
+	path = apps/NeuralFusionCore
+	url = git@github.com:Novoxpert/NeuralFusionCore.git
