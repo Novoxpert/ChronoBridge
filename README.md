@@ -57,11 +57,11 @@ Update the paths and database settings in the script:
 MODEL_CHECKPOINT = "data/outputs/model_weights.pt"
 
 # MongoDB setup
-from pymongo import MongoClient
-mongo_client = MongoClient("mongodb://localhost:27017/")
-mongo_db = mongo_client["portfolio_db"]
-mongo_col = mongo_db["chrono_bridge"]
----
+
+- from pymongo import MongoClient
+- mongo_client = MongoClient("mongodb://localhost:27017/")
+- mongo_db = mongo_client["portfolio_db"]
+- mongo_col = mongo_db["chrono_bridge"]
 
 ## Usage
 
@@ -75,7 +75,7 @@ python chronobridge_service.py --hours 4 --device cpu
 --hours: Number of past hours of data to process (default: 4)
 
 --device: Device for model inference (cpu or cuda)
----
+
 
 ## Workflow
 
