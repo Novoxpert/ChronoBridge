@@ -2,7 +2,7 @@
 
 ChronoBridge extracts and distributes synchronized fused embeddings per asset from multi-modal data, including OHLCV and news, enabling real-time downstream services to access rich, pre-processed asset features for inference, analytics, and portfolio pipelines.
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Key Features](#key-features)
@@ -46,7 +46,7 @@ It integrates multi-modal data, including **OHLCV market data** and **news embed
 5. **Sliding Window Inference**: Supports continuous streaming inference across time-series data.
 
 ---
-## 📁 Repository Layout
+## Repository Layout
 
 ```
 ChronoBridge/
@@ -90,7 +90,7 @@ ChronoBridge/
     │              └── api_service.py
     └── README.md
 ```
-## ⚙️ Setup
+## Setup
 
 ### Dependencies
 
@@ -128,7 +128,7 @@ pip install -r requirements.txt
 
 Run the service for the last N hours:
 
-🔧 Usage Example:
+Usage Example:
 ```bash
 python chronobridge_service.py --hours 4 --device cpu
 ```
@@ -189,7 +189,7 @@ Redis cache: chrono_bridge key for fast access to latest embeddings.
 - Designed for real-time or batch inference in portfolio pipelines.
 
 ---
-## 👥 Authors & Citation
+## Authors & Citation
 
 **Developed by the [Novoxpert Research Team](https://github.com/Novoxpert)**  
 Lead Contributors:
@@ -211,7 +211,7 @@ If you use this repository or build upon our work, please cite:
 }
 ```
 ---
-## 📞 Support
+## Support
 
 - **Issues & Bugs**: [Open on GitHub](https://github.com/Novoxpert/neuralfusioncore/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/Novoxpert/neuralfusioncore/discussions)
