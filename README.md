@@ -1,4 +1,4 @@
-# ChronoBridge
+# ChronoBridge: Multi-Modal Embedding Fusion & Serving Pipeline
 
 ## 📋 Table of Contents
 
