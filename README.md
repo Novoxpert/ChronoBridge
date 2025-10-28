@@ -1,5 +1,7 @@
 # ChronoBridge: Multi-Modal Embedding Fusion & Serving Pipeline
 
+ChronoBridge extracts and distributes synchronized fused embeddings per asset from multi-modal data, including OHLCV and news, enabling real-time downstream services to access rich, pre-processed asset features for inference, analytics, and portfolio pipelines.
+
 ## 📋 Table of Contents
 
 - [Overview](#overview)
