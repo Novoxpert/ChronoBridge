@@ -1,18 +1,32 @@
-# ChronoBridge Service
+# ChronoBridge
 
+## 📋 Table of Contents
+
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Architecture](#architecture)
+- [Repository Layout](#-repository-layout)
+- [Setup](#️-setup)
+  - [Dependencies](#dependencies)
+- [Usage](#usage)
+  - [Arguments](#arguments)
+- [Workflow](#workflow)
+- [Outputs](#outputs)
+- [Notes](#notes)
+- [Authors & Citation](#-authors--citation)
+- [Support](#-support)
 ---
-
 ## Overview
 
-The **ChronoBridge Service** extracts trained fused embeddings per asset from a neural fusion model and stores them in **MongoDB** and **Redis** for downstream use.  
+The **ChronoBridge Service** extracts trained fused embeddings per asset from a  **NeuralFusionCore** model and stores them in MongoDB and Redis for downstream use.  
 It integrates multi-modal data, including **OHLCV market data** and **news embeddings**, leveraging the **NeuralFusionCore** model.
 
 ---
 
-## Features
+## Key Features
 
 - Run **data ingestion** and **feature extraction** pipelines.
-- Load and evaluate **trained model weights**.
+- Load and evaluate **trained model**.
 - Generate **fused embeddings** for assets.
 - Save results to **MongoDB** and **Redis**.
 - Supports **sliding window inference** for continuous predictions.
@@ -30,14 +44,56 @@ It integrates multi-modal data, including **OHLCV market data** and **news embed
 5. **Sliding Window Inference**: Supports continuous streaming inference across time-series data.
 
 ---
+## 📁 Repository Layout
 
-## Setup
+```
+ChronoBridge/
+    ├── scripts/
+    │        ├── chronobridge_api_service.py 
+    │        └── chronobridge_service.py
+    ├──apps/
+    │      └──NeuralFusionCore/
+    │        ├── data/
+    │        │   ├── outputs/
+    │        │   │   └── model_weights.pt        
+    │        │   │   └── model_weights.pt        
+    │        │   │   └── model_weights.pt        
+    │        │   │   └── model_weights.pt        
+    │        │   │   └── model_weights.pt        
+    │        │   └── processed/
+    │        │       └── show_files.py                   
+    │        │   
+    │        ├── lib/
+    │        │   ├── backtest.py
+    │        │   ├── backtest_weights.py        
+    │        │   ├── dataset.py
+    │        │   ├── features.py
+    │        │   ├── loss_weights.py            
+    │        │   ├── market.py
+    │        │   ├── model.py
+    │        │   ├── news.py
+    │        │   ├── redis_utils.py
+    │        │   ├── train.py
+    │        │   └── utils.py
+    │        ├──_init__.py
+    │        ├── README.md
+    │        ├── requirements.txt
+    │        ├── config.py
+    │        └── scripts/
+    │              ├── data_ingest_service.py
+    │              ├── features_service.py
+    │              ├── train_service.py
+    │              ├── finetune_service.py
+    │              ├── prediction_service.py 
+    │              └── api_service.py
+    └── README.md
+```
+## ⚙️ Setup
 
 ### Dependencies
 
-- Python 3.10+
+- Python 3.12+
 - PyTorch 2.x
-- NumPy, pandas
 - MongoDB (Python driver: `pymongo`)
 - Redis (`redis` Python library)
 - NeuralFusionCore module (`apps.NeuralFusionCore`)
@@ -45,32 +101,40 @@ It integrates multi-modal data, including **OHLCV market data** and **news embed
 Install dependencies:
 
 ```bash
-pip install torch numpy pandas pymongo redis
+
+# Clone repository
+git clone https://github.com/Novoxpert/ChronoBridge.git
+cd ChronoBridge
+
+
+# (optional) create a virtual environment
+python -m venv .venv
+
+# Linux/macOS:
+source .venv/bin/activate
+
+# Windows (PowerShell):
+ .\.venv\Scripts\Activate.ps1
+
+# install exact dependencies
+pip install -r requirements.txt
 ```
 ---
 
-## Configuration
-
-Update the paths and database settings in the script:
-
-# Model checkpoint path
-MODEL_CHECKPOINT = "data/outputs/model_weights.pt"
-
-# MongoDB setup
-
-- from pymongo import MongoClient
-- mongo_client = MongoClient("mongodb://localhost:27017/")
-- mongo_db = mongo_client["portfolio_db"]
-- mongo_col = mongo_db["chrono_bridge"]
 
 ## Usage
 
 Run the service for the last N hours:
+
+🔧 Usage Example:
 ```bash
 python chronobridge_service.py --hours 4 --device cpu
 ```
+```bash
+python chronobridge_api_service.py 
+```
 
-# Arguments:
+#### Arguments:
 
 --hours: Number of past hours of data to process (default: 4)
 
@@ -103,7 +167,7 @@ Stores per-asset fused embeddings with OHLCV features.
 
 Redis cache: chrono_bridge key for fast access to latest embeddings.
 
-# Each record includes:
+#### Each record includes:
 
 * date
 
@@ -116,8 +180,38 @@ Redis cache: chrono_bridge key for fast access to latest embeddings.
 
 ## Notes
 
-Model weights should be trained and saved in NeuralFusionCore before running this service.
+- Model weights should be trained and saved in NeuralFusionCore before running this service.
 
-Sliding window ensures historical context is used for each prediction.
+- Sliding window ensures historical context is used for each prediction.
 
-Designed for real-time or batch inference in portfolio pipelines.
+- Designed for real-time or batch inference in portfolio pipelines.
+
+---
+## 👥 Authors & Citation
+
+**Developed by the [Novoxpert Research Team](https://github.com/Novoxpert)**  
+Lead Contributors:
+ - [Elham Esmaeilnia](https://github.com/Elham-Esmaeilnia)
+ 
+
+If you use this repository or build upon our work, please cite:
+
+> Novoxpert Research (2025). *NeuralFusionCore: Direct Portfolio Weight Forecasting with Cross-Gated Attention Fusion.*  
+> GitHub: [https://github.com/Novoxpert/NeuralFusionCore](https://github.com/Novoxpert/NeuralFusionCore)
+
+```bibtex
+@software{novoxpert_neuralfusioncore_2025,
+  author       = {Elham Esmaeilnia},
+  title        = {NeuralFusionCore: Direct Portfolio Weight Forecasting with Cross-Gated Attention Fusion},
+  organization = {Novoxpert Research},
+  year         = {2025},
+  url          = {https://github.com/Novoxpert/NeuralFusionCore}
+}
+```
+---
+## 📞 Support
+
+- **Issues & Bugs**: [Open on GitHub](https://github.com/Novoxpert/neuralfusioncore/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/Novoxpert/neuralfusioncore/discussions)
+- **Feature Requests**: Open a feature request issue
+---
