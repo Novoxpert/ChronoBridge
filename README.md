@@ -198,13 +198,13 @@ Lead Contributors:
 
 If you use this repository or build upon our work, please cite:
 
-> Novoxpert Research (2025). *NeuralFusionCore: Direct Portfolio Weight Forecasting with Cross-Gated Attention Fusion.*  
-> GitHub: [https://github.com/Novoxpert/NeuralFusionCore](https://github.com/Novoxpert/NeuralFusionCore)
+> Novoxpert Research (2025). *ChronoBridge: Multi-Modal Embedding Fusion & Serving Pipeline.*  
+> GitHub: [https://github.com/Novoxpert/ChronoBridge](https://github.com/Novoxpert/ChronoBridge)
 
 ```bibtex
-@software{novoxpert_neuralfusioncore_2025,
+@software{novoxpert_chronobridge_2025,
   author       = {Elham Esmaeilnia},
-  title        = {NeuralFusionCore: Direct Portfolio Weight Forecasting with Cross-Gated Attention Fusion},
+  title        = {ChronoBridge: Multi-Modal Embedding Fusion & Serving Pipeline.},
   organization = {Novoxpert Research},
   year         = {2025},
   url          = {https://github.com/Novoxpert/NeuralFusionCore}
