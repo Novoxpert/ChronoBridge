@@ -1,6 +1,52 @@
 """
 chronobridge_service.py
-Description: Extract trained fused embeddings per asset and store in MongoDB
+===================
+Extracts fused multimodal embeddings (market data + news) for each asset
+from a trained NeuralFusionCore model and stores them for downstream
+temporal research and portfolio analytics.
+
+----------------------------------------------------------------------------
+Pipeline Overview
+----------------------------------------------------------------------------
+1. Fetch latest raw market & news data (`data_ingest_service`)
+2. Generate lagged features + embeddings in *bridge mode*
+3. Slide through the time series row-by-row:
+     ▸ build rolling window of features and news embeddings
+     ▸ run model forward pass with `return_embeddings=True`
+     ▸ extract per-asset fused representations
+4. Persist fused embeddings, OHLCV, and timestamp to:
+     ▸ MongoDB  (collection: `chrono_bridge`)
+     ▸ Redis    (key: `chrono_bridge`)
+----------------------------------------------------------------------------
+CLI Usage
+----------------------------------------------------------------------------
+Default mode runs the full chrono-bridge pipeline:
+
+    python chronobridge_service.py
+
+Optional arguments:
+
+    --hours <N>     Number of past hours to ingest (default: 4)
+    --mode <mode>   Feature generation mode (default: "synchrone")
+                    Modes:
+                        synchrone  → full sync pipeline for latest window
+                        bridge    
+    --device cpu|cuda   Torch device override (default: cpu)
+
+Examples:
+
+    # Full refresh (ingest + features + fused embeddings)
+    python chronobridge_service.py --hours 6 --mode synchrone
+
+----------------------------------------------------------------------------
+Notes
+----------------------------------------------------------------------------
+• Clears previous MongoDB entries at start of run.
+• Automatically falls back to CPU if CUDA is unavailable.
+• Converts NumPy types to Python primitives for MongoDB compliance.
+• Requires a trained NeuralFusionCore weights file.
+
+----------------------------------------------------------------------------
 Author: Elham Esmaeilnia
 Date: 2025 oct 19
 Version: 1.2.1
@@ -44,9 +90,14 @@ def run_data_ingest(hours):
     logging.info(f"Running data_ingest_service to fetch last {hours} hour(s) of data")
     subprocess.run([sys.executable, '-m', 'apps.NeuralFusionCore.scripts.data_ingest_service', '--mode', 'latest', '--hours', str(hours)], check=True)
 
-def run_feature_service(hours):
+def run_feature_service(hours, mode="synchrone"):
     logging.info(f"Running features_service in INFERENCE mode for last {hours} hour(s)")
-    subprocess.run([sys.executable, '-m', 'apps.NeuralFusionCore.scripts.features_service', '--mode', 'bridge', '--latest_hours', str(hours)], check=True)
+    if mode=="bridge":
+        subprocess.run([sys.executable, '-m', 'apps.NeuralFusionCore.scripts.features_service', '--mode', 'bridge', '--latest_hours', str(hours)], check=True)
+    elif mode=="synchrone":    
+        subprocess.run([sys.executable, '-m', 'apps.NeuralFusionCore.scripts.features_service', '--mode', 'synchrone', '--latest_hours', str(hours)], check=True)
+    else:
+        logging.error(f"Mode {mode} not recognized.")
 
 # --------------------------- Model loader ---------------------------
 def load_model(configs, feat_cols_len, stock_list_len, count_dim, device='cpu'):
@@ -153,10 +204,8 @@ def run_inference(df_not_norm_te, df_te, feat_cols, data_stamp_cols, stock_list,
     df_padded = pd.concat([pad, df_te], ignore_index=True)
 
     for idx in range(num_rows):
-        # Window: seq_len rows before the current row (exclude current row)
-        window_start = idx + seq_len - seq_len  # same as idx
-        window_end = idx + seq_len  # ends at current row (excluded)
-        window = df_padded.iloc[window_start: window_end]
+        # previous seq_len rows only
+        window = df_padded.iloc[idx : idx + seq_len]
 
         ts_input = torch.tensor(window[feat_cols].values.astype(np.float32)).unsqueeze(0).to(device)
         news_input = torch.tensor(np.stack(window["embedding"].values), dtype=torch.float32).unsqueeze(0).to(device)
@@ -181,23 +230,23 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--hours", type=int, default=4)
+    parser.add_argument("--mode", type=int, default="synchrone")
     parser.add_argument("--device", type=str, default='cpu')
     args = parser.parse_args()
 
-     # ---------- Clear previous MongoDB data ----------
+    # ---------- Clear previous MongoDB data ----------
     logging.info("Clearing previous fused embeddings in MongoDB...")
     mongo_col.delete_many({})
     logging.info("Previous MongoDB data cleared.")
     
     run_data_ingest(args.hours)
-    run_feature_service(args.hours)
+    run_feature_service(args.hours, args.mode)
 
     online_merged_path = os.path.join(P.processed_dir, "online_bridge.parquet")
     if not os.path.exists(online_merged_path):
         logging.error(f"{online_merged_path} not found. Exiting.")
         return
     df_te = pd.read_parquet(online_merged_path)
-
 
     meta_path = os.path.join(P.processed_dir, 'meta.json')
     meta = json.load(open(meta_path))
