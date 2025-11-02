@@ -87,6 +87,7 @@ ChronoBridge/
     │              ├── train_service.py
     │              ├── finetune_service.py
     │              ├── prediction_service.py 
+    │              ├── backtesting_service.py
     │              └── api_service.py
     └── README.md
 ```
@@ -130,7 +131,10 @@ Run the service for the last N hours:
 
 Usage Example:
 ```bash
-python chronobridge_service.py --hours 4 --device cpu
+python chronobridge_service.py --mode synchrone --hours 4 --device cpu
+```
+```bash
+python chronobridge_service.py --mode bridge --hours 10 --device cpu
 ```
 ```bash
 python chronobridge_api_service.py 
@@ -207,13 +211,13 @@ If you use this repository or build upon our work, please cite:
   title        = {ChronoBridge: Multi-Modal Embedding Fusion & Serving Pipeline.},
   organization = {Novoxpert Research},
   year         = {2025},
-  url          = {https://github.com/Novoxpert/NeuralFusionCore}
+  url          = {https://github.com/Novoxpert/ChronoBridge}
 }
 ```
 ---
 ## Support
 
-- **Issues & Bugs**: [Open on GitHub](https://github.com/Novoxpert/neuralfusioncore/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/Novoxpert/neuralfusioncore/discussions)
+- **Issues & Bugs**: [Open on GitHub](https://github.com/Novoxpert/chronobridge/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/Novoxpert/chronobridge/discussions)
 - **Feature Requests**: Open a feature request issue
 ---
