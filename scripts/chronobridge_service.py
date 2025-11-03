@@ -58,6 +58,7 @@ from apps.NeuralFusionCore.lib.model import MarketNewsFusionWeightModel
 from apps.NeuralFusionCore.config import Paths, FeatureCfg, MarketCfg, TrainCfg, BacktestCfg
 import time
 from apps.NeuralFusionCore.lib.redis_utils import redis_client
+from dotenv import load_dotenv
 
 # ---------------- Config ----------------
 P = Paths(); F = FeatureCfg(); MC = MarketCfg(); T = TrainCfg(); B = BacktestCfg()
@@ -66,9 +67,20 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(m
 MODEL_CHECKPOINT = "data/outputs/model_weights.pt"
 
 # --------------------------- MongoDB setup ---------------------------
-mongo_client = MongoClient("mongodb://localhost:27017/")
-mongo_db = mongo_client["portfolio_db"]
-mongo_col = mongo_db["chrono_bridge"]
+load_dotenv()
+NOVO_MONGO_USER = os.getenv("NOVO_MONGO_USER")
+NOVO_MONGO_PASS = os.getenv("NOVO_MONGO_PASS")
+NOVO_MONGO_HOST = os.getenv("NOVO_MONGO_HOST")
+NOVO_MONGO_PORT = os.getenv("NOVO_MONGO_PORT")
+NOVO_MONGO_AUTH_DB = os.getenv("NOVO_MONGO_AUTH_DB")
+NOVO_MONGO_DB = os.getenv("NOVO_MONGO_DB")
+
+# Connect to MongoDB using the credentials
+client = MongoClient(f"mongodb://{NOVO_MONGO_USER}:{NOVO_MONGO_PASS}@{NOVO_MONGO_HOST}:{NOVO_MONGO_PORT}/?authSource={NOVO_MONGO_AUTH_DB}")
+
+# Access your database and collection
+db = client[NOVO_MONGO_DB]
+mongo_col = db["chrono_bridge"]
 # --------------------------- Helper: convert NumPy to Python types ---------------------------
 def to_python_types(obj):
     """Recursively convert NumPy scalar types to native Python types for MongoDB compatibility."""
