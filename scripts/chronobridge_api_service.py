@@ -12,16 +12,24 @@ from typing import Optional, List
 from pymongo import MongoClient
 from datetime import datetime
 import uvicorn
-import json
-
+import json, os
+from dotenv import load_dotenv
 # ---------------- MongoDB setup ----------------
-MONGO_URI = "mongodb://localhost:27017/"
-DB_NAME = "portfolio_db"
-COLLECTION_NAME = "chrono_bridge"
+load_dotenv()
+NOVO_MONGO_USER = os.getenv("NOVO_MONGO_USER")
+NOVO_MONGO_PASS = os.getenv("NOVO_MONGO_PASS")
+NOVO_MONGO_HOST = os.getenv("NOVO_MONGO_HOST")
+NOVO_MONGO_PORT = os.getenv("NOVO_MONGO_PORT")
+NOVO_MONGO_AUTH_DB = os.getenv("NOVO_MONGO_AUTH_DB")
+NOVO_MONGO_DB = os.getenv("NOVO_MONGO_DB")
 
-mongo_client = MongoClient(MONGO_URI)
-mongo_db = mongo_client[DB_NAME]
-mongo_col = mongo_db[COLLECTION_NAME]
+# Connect to MongoDB using the credentials
+client = MongoClient(f"mongodb://{NOVO_MONGO_USER}:{NOVO_MONGO_PASS}@{NOVO_MONGO_HOST}:{NOVO_MONGO_PORT}/?authSource={NOVO_MONGO_AUTH_DB}")
+
+# Access your database and collection
+db = client[NOVO_MONGO_DB]
+COLLECTION_NAME = "chrono_bridge"
+mongo_col = db[COLLECTION_NAME]
 
 # ---------------- FastAPI app ----------------
 app = FastAPI(title="ChronoBridge API", version="1.0")
