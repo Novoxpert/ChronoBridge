@@ -131,7 +131,7 @@ Run the service for the last N hours:
 
 Usage Example:
 ```bash
-python chronobridge_service.py --mode synchrone --hours 4 --device cpu
+python chronobridge_service.py --mode synchronize --hours 4 --device cpu
 ```
 ```bash
 python chronobridge_service.py --mode bridge --hours 10 --device cpu

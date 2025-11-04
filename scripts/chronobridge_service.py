@@ -27,16 +27,16 @@ Default mode runs the full chrono-bridge pipeline:
 Optional arguments:
 
     --hours <N>     Number of past hours to ingest (default: 4)
-    --mode <mode>   Feature generation mode (default: "synchrone")
+    --mode <mode>   Feature generation mode (default: "synchronize")
                     Modes:
-                        synchrone  → full sync pipeline for latest window
+                        synchronize  → full sync pipeline for latest window
                         bridge    
     --device cpu|cuda   Torch device override (default: cpu)
 
 Examples:
 
     # Full refresh (ingest + features + fused embeddings)
-    python chronobridge_service.py --hours 6 --mode synchrone
+    python chronobridge_service.py --hours 6 --mode synchronize
 
 ----------------------------------------------------------------------------
 Notes
@@ -102,12 +102,12 @@ def run_data_ingest(hours):
     logging.info(f"Running data_ingest_service to fetch last {hours} hour(s) of data")
     subprocess.run([sys.executable, '-m', 'apps.NeuralFusionCore.scripts.data_ingest_service', '--mode', 'latest', '--hours', str(hours)], check=True)
 
-def run_feature_service(hours, mode="synchrone"):
+def run_feature_service(hours, mode="synchronize"):
     logging.info(f"Running features_service in INFERENCE mode for last {hours} hour(s)")
     if mode=="bridge":
         subprocess.run([sys.executable, '-m', 'apps.NeuralFusionCore.scripts.features_service', '--mode', 'bridge', '--latest_hours', str(hours)], check=True)
-    elif mode=="synchrone":    
-        subprocess.run([sys.executable, '-m', 'apps.NeuralFusionCore.scripts.features_service', '--mode', 'synchrone', '--latest_hours', str(hours)], check=True)
+    elif mode=="synchronize":    
+        subprocess.run([sys.executable, '-m', 'apps.NeuralFusionCore.scripts.features_service', '--mode', 'synchronize', '--latest_hours', str(hours)], check=True)
     else:
         logging.error(f"Mode {mode} not recognized.")
 
@@ -242,7 +242,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--hours", type=int, default=4)
-    parser.add_argument("--mode", type=int, default="synchrone")
+    parser.add_argument("--mode", type=int, default="synchronize")
     parser.add_argument("--device", type=str, default='cpu')
     args = parser.parse_args()
 
