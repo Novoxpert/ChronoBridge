@@ -1,0 +1,1 @@
+models/bigbird-2048-final/bigbird-2048-final/*.safetensors filter=lfs diff=lfs merge=lfs -text
