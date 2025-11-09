@@ -51,17 +51,26 @@ It integrates multi-modal data, including **OHLCV market data** and **news embed
 ```
 ChronoBridge/
     ├── scripts/
+    │        ├── data_ingest_service.py
+    │        ├── features_service.py
     │        ├── chronobridge_api_service.py 
     │        └── chronobridge_service.py
+    ├──data/
+    │      └──processed/
+    ├──src/
+    │     └──inference.py
+    ├── lib/
+    │        ├── features.py
+    │        ├── market.py
+    │        ├── news.py 
+    │        ├── utils.py 
+    │        └── redis_utils.py
+    ├──models/
     ├──apps/
     │      └──NeuralFusionCore/
     │        ├── data/
     │        │   ├── outputs/
-    │        │   │   └── model_weights.pt        
-    │        │   │   └── model_weights.pt        
-    │        │   │   └── model_weights.pt        
-    │        │   │   └── model_weights.pt        
-    │        │   │   └── model_weights.pt        
+    │        │   │   └── model_weights.pt                          
     │        │   └── processed/
     │        │       └── show_files.py                   
     │        │   
@@ -69,12 +78,8 @@ ChronoBridge/
     │        │   ├── backtest.py
     │        │   ├── backtest_weights.py        
     │        │   ├── dataset.py
-    │        │   ├── features.py
     │        │   ├── loss_weights.py            
-    │        │   ├── market.py
     │        │   ├── model.py
-    │        │   ├── news.py
-    │        │   ├── redis_utils.py
     │        │   ├── train.py
     │        │   └── utils.py
     │        ├──_init__.py
@@ -193,13 +198,35 @@ Redis cache: chrono_bridge key for fast access to latest embeddings.
 - Designed for real-time or batch inference in portfolio pipelines.
 
 ---
+## Script Cheat‑Sheet
+
+- **`lib/*.py`** — internal modules for features, news embeddings, utilities, ...  
+- **`config.py`** — central configuration / argument helpers used by the scripts.
+- **`src/inference.py`** — the class that extracts fused multimodal embeddings (market data + news) for each asset from a trained NeuralFusionCore model and stores them for downstream temporal research and portfolio analytics.
+- **`scripts/data_ingest_service.py`** — fetch OHLCV from ClickHouse and news from Mongo for the given interval, and push results (per-symbol ohlcv DataFrame pickles and news DataFrame) to Redis.
+
+Usage examples:
+one-shot latest 4h (use scheduler to run every 4h)
+```bash
+python -m scripts.data_ingest_service --mode latest --hours 4
+```
+- **`scripts/features_service.py`** — Builds features from Redis.
+
+Modes:
+  - train:     full rebuild (includes normalizer + meta)
+  - finetune:  incremental build (reuse existing normalizer/meta)
+  - inference: build features for inference only (produces online_test.parquet)
+  - bridge:    build features for ChronobBridge only
+  - time:      select data by start_time/end_time for any mode
+
+Usage Examples:
+```bash
+python -m scripts.features_service --mode synchronize --latest_hours 24
+```
+---
 ## Authors & Citation
 
 **Developed by the [Novoxpert Research Team](https://github.com/Novoxpert)**  
-Lead Contributors:
- - [Elham Esmaeilnia](https://github.com/Elham-Esmaeilnia)
- 
-
 If you use this repository or build upon our work, please cite:
 
 > Novoxpert Research (2025). *ChronoBridge: Multi-Modal Embedding Fusion & Serving Pipeline.*  
