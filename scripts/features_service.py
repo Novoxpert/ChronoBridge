@@ -22,15 +22,16 @@ Examples:
   python features_service.py --mode train --start_time "2025-10-01T00:00" --end_time "2025-10-02T00:00"
 
 Author: Elham Esmaeilnia(elham.e.shirvani@gmail.com)
-Updated: 2025 Oct 4
+Updated: 2025 Nov 12
 """
 
-import argparse, logging, os, json, sys
+import argparse, logging, os, json, sys, pickle, zlib
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 import time
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # --- Universal import fix (works standalone or as submodule) ---
@@ -44,84 +45,96 @@ if PARENT == "apps":  # running inside AlphaFusionNet/apps/
 else:  # running as standalone ChronoBridge repo
     sys.path.insert(0, CHRONO_DIR)
 try:
-    from apps.ChronoBridge.config import Paths, FeatureCfg, NewsCfg, MarketCfg
+    from apps.ChronoBridge.config import Paths, FeatureCfg, NewsCfg, MarketCfg, RedisCfg
     from apps.ChronoBridge.lib import features as F, news as N
-    from apps.ChronoBridge.lib.redis_utils import get_all_redis_data
-except ImportError:   
-    from ..config import Paths, FeatureCfg, NewsCfg, MarketCfg
+    from apps.ChronoBridge.lib.redis_utils import empty_current_database, load_ohlcv_from_redis, load_news_range_from_redis
+except ImportError:
+    from ..config import Paths, FeatureCfg, NewsCfg, MarketCfg, RedisCfg
     from ..lib import features as F, news as N
-    from ..lib.redis_utils import get_all_redis_data
+    from ..lib.redis_utils import empty_current_database, load_ohlcv_from_redis, load_news_range_from_redis
 
-
-P = Paths(); FC = FeatureCfg(); NC = NewsCfg(); MC = MarketCfg()
+P = Paths(); FC = FeatureCfg(); NC = NewsCfg(); MC = MarketCfg(); RE = RedisCfg()
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 
 
 # ----------------------------------------------------------------------
 def make_features_from_redis(start_time=None, end_time=None, no_news_vec=None, mode="train"):
-    """Fetch OHLCV + News and build merged feature table."""
-    ohlcv_dict, df_news = get_all_redis_data(
-       
-        [f"{s}" for s in MC.symbols_usdt],
-        start_time=start_time,
-        end_time=end_time
-    )
+    """Fetch OHLCV + (chunked) News and build merged feature table."""
+    # 1) Load OHLCV per symbol
+    symbols = [f"{s}" for s in MC.symbols_usdt]
+    ohlcv_dict = load_ohlcv_from_redis(symbols, start_time=start_time, end_time=end_time)
+
     per_asset = []
     for sym, df3m in ohlcv_dict.items():
         if df3m is None or df3m.empty:
             continue
-        
-        per_asset.append(F.add_targets_and_features(
-            df3m, FC.horizon_steps, FC.seq_len, None, sym, mode
-        ))
+        per_asset.append(
+            F.add_targets_and_features(
+                df3m, FC.horizon_steps, FC.seq_len, None, sym, mode
+            )
+        )
 
     if not per_asset:
         logging.warning("No OHLCV data available in Redis.")
-        return pd.DataFrame(), None, None
+        return pd.DataFrame(), pd.DataFrame(), None
 
     merged = F.merge_assets(per_asset)
 
     # --- ensure all symbols exist ---
     for sym in MC.symbols_usdt:
-        if mode == 'bridge' or mode == 'synchronize' or mode == 'future_testing':
+        if mode in ('bridge', 'synchronize', 'future_testing'):
             cols_needed = [f"{sym}_{c}" for c in
-                       ["open","high","low","close", "volume", "prev_return", "prev_volatility", "return", "volatility", "target_return"]]
+                           ["open","high","low","close","volume","prev_return","prev_volatility","return","volatility","target_return"]]
         else:
             cols_needed = [f"{sym}_{c}" for c in
-                        ["close", "volume", "prev_return", "prev_volatility", "return", "volatility", "target_return"]]
-        
-        # Get only the missing columns
+                           ["close","volume","prev_return","prev_volatility","return","volatility","target_return"]]
         missing_cols = [c for c in cols_needed if c not in merged.columns]
-
-        # Create a DataFrame of zeros for missing columns
         if missing_cols:
             zeros_df = pd.DataFrame(0.0, index=merged.index, columns=missing_cols)
             merged = pd.concat([merged, zeros_df], axis=1)
-            
+
     merged = merged.copy()
     #---- add timesnet features---
     tcols = F.make_time_cols(merged)
     merged = pd.concat([merged, tcols], axis=1)
 
-    # --- add news embeddings ---
+    # 2) Load chunked news and attach embeddings (if available)
+    df_news = load_news_range_from_redis(start_time, end_time)
     if df_news is not None and not df_news.empty:
-        df_news = N.add_onehot_columns(df_news, MC.symbols_usdt)
-        tok, mdl, device, max_len = N.load_text_encoder(NC.model_path)
-        df_news['embedding'] = [e for e in N.embed_texts(
-            df_news['content'].to_list(), tok, mdl, device, max_len, NC.pooling, NC.batch_size
-        )]
-        df_news['news_count'] = 1
-        if no_news_vec is None:
-            no_news_vec = N.embed_texts(
-                [NC.no_news_token], tok, mdl, device, max_len, NC.pooling, batch_size=1
-            )[0]
+        # Add one-hots (expects ticker columns equal to symbols)
+        if all(s in df_news.columns for s in MC.symbols_usdt) or len(set(MC.symbols_usdt).intersection(df_news.columns)) > 0:
+            df_news = N.add_onehot_columns(df_news, MC.symbols_usdt)
+        else:
+            # if no symbol columns in news, still proceed—resampler will fall back to counts only
+            pass
+
+        # If content is missing (because ingest projected only releasedAt), skip embeddings safely
+        if 'content' in df_news.columns and df_news['content'].notna().any():
+            tok, mdl, device, max_len = N.load_text_encoder(NC.model_path)
+            df_news['embedding'] = [e for e in N.embed_texts(
+                df_news['content'].to_list(), tok, mdl, device, max_len, NC.pooling, NC.batch_size
+            )]
+            df_news['news_count'] = 1
+            if no_news_vec is None:
+                no_news_vec = N.embed_texts(
+                    [NC.no_news_token], tok, mdl, device, max_len, NC.pooling, batch_size=1
+                )[0]
+        else:
+            # fallback: no content → no embeddings; use a constant "no-news" vector
+            logging.info("News 'content' missing; attaching counts only and using no-news vector.")
+            df_news['embedding'] = [no_news_vec for _ in range(len(df_news))]
+            df_news['news_count'] = 1
 
         news_3m = N.resample_news_3m(
-            df_news[['releasedAt', 'embedding', 'news_count'] + [s for s in MC.symbols_usdt ]].copy(),
-            np.asarray(no_news_vec), rule=NC.rule)
-        
+            df_news[['releasedAt', 'embedding', 'news_count'] +
+                    [s for s in MC.symbols_usdt if s in df_news.columns]].copy(),
+            np.asarray(no_news_vec), rule=NC.rule
+        )
         merged = F.attach_news(merged, news_3m)
 
+    # Ensure embedding column exists even if no news at all
+    if 'embedding' not in merged.columns:
+        merged['embedding'] = [no_news_vec for _ in range(len(merged))]
 
     merged['embedding'] = merged['embedding'].apply(
         lambda x: np.asarray(x, dtype=np.float32) if isinstance(x, (list, np.ndarray)) else no_news_vec
@@ -130,7 +143,6 @@ def make_features_from_redis(start_time=None, end_time=None, no_news_vec=None, m
     non_embed_cols = [c for c in merged.columns if c != 'embedding']
     merged[non_embed_cols] = merged[non_embed_cols].fillna(0)
     return merged, df_news, no_news_vec
-
 
 # ----------------------------------------------------------------------
 def time_split_and_save(merged, val_frac=0.2, mode="train"):
@@ -144,7 +156,6 @@ def time_split_and_save(merged, val_frac=0.2, mode="train"):
     feat_cols = [c for c in all_cols if (('return' not in c) or ('prev_return' in c))]
     feat_cols = [c for c in feat_cols if (('volatility' not in c) or ('prev_volatility' in c))]
     stock_list = [s for s in MC.symbols_usdt]
-    #count_cols = [c for c in merged.columns if c in [s[:-4] for s in MC.symbols_usdt]]
     count_cols = [c for c in merged.columns if c in [s for s in MC.symbols_usdt]]
     data_stamp_cols = ['month', 'day', 'weekday', 'hour', 'minute']
     merged = merged.sort_values("dateTime").reset_index(drop=True)
@@ -164,11 +175,8 @@ def time_split_and_save(merged, val_frac=0.2, mode="train"):
             split_idx=split_idx,
             save_path=P.normalizer_pkl
         )
-        # save meta
         with open(os.path.join(P.processed_dir, 'meta.json'), 'w') as f:
             json.dump({'feature_cols': feat_cols, 'stock_list': stock_list, 'count_cols': count_cols, 'data_stamp_cols': data_stamp_cols}, f)
-
-        # save parquet
         df_tr.to_parquet(os.path.join(P.processed_dir, 'train.parquet'), index=False)
         df_va.to_parquet(os.path.join(P.processed_dir, 'val.parquet'), index=False)
 
@@ -191,27 +199,18 @@ def time_split_and_save(merged, val_frac=0.2, mode="train"):
         n = len(merged)
         val_frac = 0.2
         test_frac = 0.1
-        n_tr = int((1.0 - val_frac - test_frac) * n)  # number of training samples
-        n_va = int(val_frac * n)                       # number of validation samples
-        n_te = n - n_tr - n_va                         # remaining samples for test
-
-        split_idx = (
-            range(0, n_tr),                # train indices
-            range(n_tr, n_tr + n_va),      # validation indices
-            range(n_tr + n_va, n)          # test indices
-        )
-
+        n_tr = int((1.0 - val_frac - test_frac) * n)
+        n_va = int(val_frac * n)
+        n_te = n - n_tr - n_va
+        split_idx = (range(0, n_tr), range(n_tr, n_tr + n_va), range(n_tr + n_va, n))
         df_tr, df_va, df_te, stats = F.normalize_train_val_test_stream(
             merged.fillna(0),
             feature_cols=feat_cols,
             split_idx=split_idx,
             save_path=P.normalizer_backtesting_pkl
         )
-        # save meta
         with open(os.path.join(P.processed_backtesting_dir, 'meta.json'), 'w') as f:
             json.dump({'feature_cols': feat_cols, 'stock_list': stock_list, 'count_cols': count_cols, 'data_stamp_cols': data_stamp_cols}, f)
-
-        # save parquet
         df_tr.to_parquet(os.path.join(P.processed_backtesting_dir, 'backtesting_train.parquet'), index=False)
         df_va.to_parquet(os.path.join(P.processed_backtesting_dir, 'backtesting_val.parquet'), index=False)
         df_te.to_parquet(os.path.join(P.processed_backtesting_dir, 'backtesting_test.parquet'), index=False)
@@ -223,7 +222,6 @@ def time_split_and_save(merged, val_frac=0.2, mode="train"):
             feature_cols=feat_cols,
             normalizer_path=P.normalizer_pkl
         )
-        # Save online_test.parquet
         online_path = os.path.join(P.processed_dir, "online_test.parquet")
         merged_norm.to_parquet(online_path, index=False)
         logging.info(f"Saved inference parquet file: {online_path}")
@@ -233,33 +231,21 @@ def time_split_and_save(merged, val_frac=0.2, mode="train"):
         merged_not_norm = merged.fillna(0).copy()
         keep = {'dateTime','_open','_high','_low','_close','_volume','_prev_return','_prev_volatility',
         '_return','_volatility','_target_return','t3'}
-
-        # Filter columns
         filtered_cols = [col for col in merged_not_norm.columns 
                  if (col in keep or any(col.endswith(k) for k in keep)) 
                  and col != 'embedding']
-
         merged_not_norm = merged_not_norm[filtered_cols]
-
-        # Drop columns that end with 'open', 'high', or 'low'
-        merged = merged.drop(
-            columns=[col for col in merged.columns if col.endswith(("open", "high", "low"))]
-        )
+        merged = merged.drop(columns=[col for col in merged.columns if col.endswith(("open", "high", "low"))])
         merged_norm = F.apply_existing_normalizer(
             df=merged.fillna(0),
             feature_cols=feat_cols,
             normalizer_path=P.normalizer_pkl
         )
-
-        keep = {'dateTime','_close','_volume','_prev_return','_prev_volatility',
-        '_return','_volatility','_target_return','t3'}
-        # Filter columns
+        keep = {'dateTime','_close','_volume','_prev_return','_prev_volatility','_return','_volatility','_target_return','t3'}
         filtered_cols = [col for col in merged_norm.columns 
                  if (col in keep or any(col.endswith(k) for k in keep)) 
                  and col != 'embedding']
         merged_norm = merged_norm[filtered_cols]
-       
-        # Save online_metric.parquet
         online_metric_path = os.path.join(P.processed_dir, "online_metric.parquet")
         merged_norm.to_parquet(online_metric_path, index=False)
         logging.info(f"Saved metric parquet file: {online_metric_path}")
@@ -270,16 +256,12 @@ def time_split_and_save(merged, val_frac=0.2, mode="train"):
     elif mode == "bridge":
         logging.info("Mode: BRIDGE → Reusing existing normalizer...")
         merged_not_norm = merged.fillna(0).copy()
-        # Drop columns that end with 'open', 'high', or 'low'
-        merged = merged.drop(
-            columns=[col for col in merged.columns if col.endswith(("open", "high", "low"))]
-        )
+        merged = merged.drop(columns=[col for col in merged.columns if col.endswith(("open", "high", "low"))])
         merged_norm = F.apply_existing_normalizer(
             df=merged.fillna(0),
             feature_cols=feat_cols,
             normalizer_path=P.normalizer_pkl
         )
-        # Save online_test.parquet
         online_bridge_path = os.path.join(P.processed_dir, "online_bridge.parquet")
         merged_norm.to_parquet(online_bridge_path, index=False)
         logging.info(f"Saved bridge parquet file: {online_bridge_path}")
@@ -290,16 +272,12 @@ def time_split_and_save(merged, val_frac=0.2, mode="train"):
     elif mode == "synchronize":
         logging.info("Mode: synchronize → Reusing existing normalizer...")
         merged_not_norm = merged.fillna(0).copy()
-        # Drop columns that end with 'open', 'high', or 'low'
-        merged = merged.drop(
-            columns=[col for col in merged.columns if col.endswith(("open", "high", "low"))]
-        )
+        merged = merged.drop(columns=[col for col in merged.columns if col.endswith(("open", "high", "low"))])
         merged_norm = F.apply_existing_normalizer(
             df=merged.fillna(0),
             feature_cols=feat_cols,
             normalizer_path=P.normalizer_pkl
         )
-        # Save online_test.parquet and online_bridge.parquet
         online_path = os.path.join(P.processed_dir, "online_test.parquet")
         merged_norm.to_parquet(online_path, index=False)
         logging.info(f"Saved inference parquet file: {online_path}")
@@ -313,7 +291,6 @@ def time_split_and_save(merged, val_frac=0.2, mode="train"):
     else:
         logging.error(f"Mode {mode} not recognized.")
 
-
 # ----------------------------------------------------------------------
 def parse_time_args(start_time_str, end_time_str):
     start_time, end_time = None, None
@@ -325,12 +302,11 @@ def parse_time_args(start_time_str, end_time_str):
 
 # ----------------------------------------------------------------------
 def main():
-     
-    start_service_time= time.time()
+    start_service_time = time.time()
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str, default="train", choices=["train", "finetune", "inference", "bridge", "synchronize", "backtesting", "future_testing"])
-    parser.add_argument("--latest_hours", type=int, default=4)
-    parser.add_argument("--history_days", type=int, default=30)
+    parser.add_argument("--latest_hours", type=int, default=None)
+    parser.add_argument("--history_days", type=int, default=None)
     parser.add_argument("--start_time", type=str, default=None)
     parser.add_argument("--end_time", type=str, default=None)
     parser.add_argument("--val_frac", type=float, default=0.2)
@@ -353,9 +329,12 @@ def main():
 
     time_split_and_save(merged, val_frac=args.val_frac, mode=args.mode)
     end_service_time = time.time()
+    try:
+        if empty_current_database()=="ok":
+            logging.info("redis databse is empty now.")
+    except Exception as e:
+        logging.debug("Could not empty redis database: %s", e)
     print(f"Time elapsed for features service: {end_service_time - start_service_time:.2f} seconds")
-
 
 if __name__ == "__main__":
     main()
-    

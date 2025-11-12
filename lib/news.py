@@ -1,4 +1,4 @@
-import os, numpy as np, pandas as pd, torch
+import os, numpy as np, pandas as pd, torch,logging
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
 
@@ -43,41 +43,124 @@ def load_text_encoder(model_path: str, device: str = None, max_len: int = 2048):
     mdl = AutoModel.from_pretrained(model_path).to(device).eval()
     return tok, mdl, device, max_len
 
+#One-time global perf knobs (safe to set once per process)
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
 @torch.no_grad()
-def embed_texts(texts, tok, mdl, device, max_len=2048, pooling="mean", batch_size=32):
-    
-    out = []
-    print(torch.cuda.is_available())
-    print(torch.cuda.get_device_name(0))
-    for i in tqdm(range(0, len(texts), batch_size), desc="Embedding news"):
-        batch = texts[i:i+batch_size]
-        #Edited by "Elham Esmaeilnia" (2025 Sep 8). Clean batch: force everything to string, replace None/NaN with ""
-        def clean_texts(batch):
-            cleaned = []
-            for t in batch:
-                if t is None or (isinstance(t, float) and np.isnan(t)):
-                    cleaned.append(None)  # mark invalid
-                elif not isinstance(t, str):
-                    t = str(t)
-                    if not t.strip():
-                        cleaned.append(None)
-                    else:
-                        cleaned.append(t.strip())
-                else:
-                    cleaned.append(t.strip() if t.strip() else None)
-            return cleaned
-        #batch = clean_texts(texts[i:i+batch_size])
-        #enc = tok(clean_batch, truncation=True, padding=True, max_length=max_len, return_tensors="pt").to(device)
-        enc = tok(batch, truncation=True, padding=True, max_length=max_len, return_tensors="pt").to(device)
-        hs = mdl(**enc).last_hidden_state
-        if pooling == "mean":
-            mask = enc["attention_mask"].unsqueeze(-1)
-            pooled = (hs * mask).sum(1) / mask.sum(1).clamp(min=1)
-        else:
-            pooled = hs[:, 0, :]
-        out.append(pooled.detach().cpu().numpy())
-        if device == "cuda": torch.cuda.empty_cache()
-    return np.vstack(out)
+def embed_texts(
+    texts,
+    tok,
+    mdl,
+    device="cuda",
+    max_len=256,
+    pooling="mean",        # "mean" or "cls"
+    batch_size=512,        # tune up/down; will auto-backoff on OOM
+    show_progress=True
+):
+    """
+    Efficient text embedding with GPU, AMP, and OOM-safe batching.
+
+    - Cleans None/NaN -> "" (or a special token if you prefer)
+    - Uses HF fast tokenizer, padding+truncation to max_len
+    - Mixed precision on CUDA for 1.5–3x speedup
+    - Non-blocking tensor transfers
+    - Avoids per-batch .cpu().numpy() until the end
+    - Auto backoff on CUDA OOM by halving batch_size
+    """
+
+    # --- Clean input texts cheaply (vectorized-ish) ---
+    def _to_str(x):
+        if x is None:
+            return ""
+        if isinstance(x, float) and np.isnan(x):
+            return ""
+        s = x if isinstance(x, str) else str(x)
+        s = s.strip()
+        return s  # allow "" after strip
+
+    texts = [ _to_str(t) for t in texts ]
+    n = len(texts)
+    if n == 0:
+        return np.zeros((0, mdl.config.hidden_size), dtype=np.float32)
+
+    mdl.eval()
+    dev = torch.device(device if (device == "cuda" and torch.cuda.is_available()) else "cpu")
+
+    # Use AMP on CUDA
+    use_amp = (dev.type == "cuda")
+    scaler_ctx = torch.autocast(device_type="cuda", dtype=torch.float16) if use_amp else torch.autocast(enabled=False, device_type="cpu")
+
+    # Progress bar
+    rng = range(0, n, batch_size)
+    if show_progress:
+        rng = tqdm(rng, desc="Embedding news", total=(n + batch_size - 1) // batch_size)
+
+    # Accumulate as tensors -> single CPU copy at the end
+    emb_chunks = []
+    i = 0
+    cur_bs = batch_size
+
+    while i < n:
+        j = min(i + cur_bs, n)
+        batch = texts[i:j]
+
+        try:
+            # Tokenize on CPU; create PT tensors
+            enc = tok(
+                batch,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_len
+            )
+
+            # Move to GPU with non_blocking copies (uses pinned memory path)
+            for k in enc:
+                enc[k] = enc[k].to(dev, non_blocking=True)
+
+            with scaler_ctx:
+                out = mdl(**enc).last_hidden_state  # [B, T, H]
+
+                if pooling == "mean":
+                    mask = enc["attention_mask"].unsqueeze(-1)  # [B, T, 1]
+                    denom = mask.sum(1).clamp(min=1)
+                    pooled = (out * mask).sum(1) / denom        # [B, H]
+                else:  # "cls"
+                    pooled = out[:, 0, :]                        # [B, H]
+
+            # Keep on GPU; move to CPU only once at the end
+            emb_chunks.append(pooled.detach())
+
+            # Advance window & progress
+            i = j
+            if show_progress:
+                # Manually update by the number of items processed in this (possibly smaller) batch
+                tqdm.write(f"Processed {i}/{n}") if (i % (cur_bs * 4) == 0) else None
+
+            # Optional: do NOT empty the cache every loop; it hurts perf.
+            # torch.cuda.empty_cache()  # avoid unless you are truly memory constrained
+
+            # If we had previously reduced batch size due to OOM and now succeed a few times,
+            # you could consider slowly increasing it again. Kept simple here.
+
+        except RuntimeError as e:
+            if "CUDA out of memory" in str(e) and dev.type == "cuda":
+                # Back off batch size and retry the same range
+                new_bs = max(1, cur_bs // 2)
+                if new_bs == cur_bs:
+                    raise  # cannot reduce further
+                logging.warning(f"OOM at batch_size={cur_bs}. Reducing to {new_bs} and retrying...")
+                cur_bs = new_bs
+                torch.cuda.empty_cache()
+                continue
+            else:
+                raise
+
+    # Concatenate on GPU, single D2H copy, then to numpy
+    emb = torch.cat(emb_chunks, dim=0)          # [N, H] on GPU (or CPU)
+    emb = emb.to("cpu", non_blocking=True)      # one big transfer
+    return emb.numpy()
 
 
 def resample_news_3m(df_news: pd.DataFrame, no_news_vec: np.ndarray, rule: str = "3min") -> pd.DataFrame:
