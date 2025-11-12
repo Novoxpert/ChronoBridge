@@ -5,3 +5,4 @@ __pycache__/
 # Other common ignores
 .env
 *.log
+data/processed/
