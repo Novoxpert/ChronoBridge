@@ -152,10 +152,20 @@ def main():
     torch.cuda.empty_cache()
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--hours", type=int, default=4)
+    parser.add_argument("--hours", type=int, default=None, help="Number of hours to fetch data for.")
+    parser.add_argument("--history_days", type=int, default=None, help="Number of days of history to convert to hours.")
     parser.add_argument("--mode", type=str, default="synchronize")
     parser.add_argument("--device", type=str, default='cpu')
     args = parser.parse_args()
+
+     # ---------- Convert history_days to hours if provided ----------
+    if args.history_days is not None:
+        args.hours = args.history_days * 24
+        logging.info(f"Converted history_days={args.history_days} to hours={args.hours}.")
+    elif args.hours is None:
+        # fallback default (if neither provided)
+        args.hours = 6
+        logging.info("No history_days or hours specified, using default 6 hours.")
 
     # ---------- Fetch data and Feature extraction ---------- 
     run_data_ingest(args.hours)
