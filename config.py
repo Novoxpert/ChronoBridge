@@ -19,7 +19,7 @@ class Paths:
 @dataclass
 class NewsCfg:
     model_path: str = rel_path("models/bigbird-2048-final/bigbird-2048-final")
-    batch_size: int = 2
+    batch_size: int = 4
     max_len: int = 2048
     pooling: str = "mean"
     rule: str = "3min"
@@ -42,8 +42,8 @@ class FeatureCfg:
         "open": "first", "high": "max", "low": "min", "close": "last",
         "volume": "sum"
     })
-    seq_len: int = 10
-    horizon_steps: int = 5
+    seq_len: int = 80
+    horizon_steps: int = 80
     news_rule: str = "3min"
     resample: int = 3
 
@@ -87,7 +87,7 @@ class LossCfg:
 
 @dataclass
 class BacktestCfg:
-    stride: int = 5
+    stride: int = 80
     stoploss: int = 5
     takeprofit: int = 5
 
