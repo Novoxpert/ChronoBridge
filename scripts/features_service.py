@@ -59,8 +59,9 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(m
 
 # ----------------------------------------------------------------------
 def make_features_from_redis(start_time=None, end_time=None, no_news_vec=None, mode="train"):
-    """Fetch OHLCV + (chunked) News and build merged feature table."""
-    # 1) Load OHLCV per symbol
+    """Fetch OHLCV + News (chunked) and build merged feature table — compatible with old format."""
+    
+    # ----------------------- OHLCV -----------------------
     symbols = [f"{s}" for s in MC.symbols_usdt]
     ohlcv_dict = load_ohlcv_from_redis(symbols, start_time=start_time, end_time=end_time)
 
@@ -68,6 +69,7 @@ def make_features_from_redis(start_time=None, end_time=None, no_news_vec=None, m
     for sym, df3m in ohlcv_dict.items():
         if df3m is None or df3m.empty:
             continue
+        
         per_asset.append(
             F.add_targets_and_features(
                 df3m, FC.horizon_steps, FC.seq_len, None, sym, mode
@@ -80,68 +82,88 @@ def make_features_from_redis(start_time=None, end_time=None, no_news_vec=None, m
 
     merged = F.merge_assets(per_asset)
 
-    # --- ensure all symbols exist ---
+    # ----------------------- Ensure missing OHLCV cols -----------------------
     for sym in MC.symbols_usdt:
-        if mode in ('bridge', 'synchronize', 'future_testing'):
+        if mode == "bridge":
             cols_needed = [f"{sym}_{c}" for c in
-                           ["open","high","low","close","volume","prev_return","prev_volatility","return","volatility","target_return"]]
+                           ["open","high","low","close","volume",
+                            "prev_return","prev_volatility",
+                            "return","volatility","target_return"]]
         else:
             cols_needed = [f"{sym}_{c}" for c in
-                           ["close","volume","prev_return","prev_volatility","return","volatility","target_return"]]
-        missing_cols = [c for c in cols_needed if c not in merged.columns]
-        if missing_cols:
-            zeros_df = pd.DataFrame(0.0, index=merged.index, columns=missing_cols)
-            merged = pd.concat([merged, zeros_df], axis=1)
+                           ["close","volume",
+                            "prev_return","prev_volatility",
+                            "return","volatility","target_return"]]
 
-    merged = merged.copy()
-    #---- add timesnet features---
+        for c in cols_needed:
+            if c not in merged.columns:
+                merged[c] = 0.0
+
+    # ----------------------- Time features -----------------------
     tcols = F.make_time_cols(merged)
     merged = pd.concat([merged, tcols], axis=1)
 
-    # 2) Load chunked news and attach embeddings (if available)
+    # ----------------------- NEWS (chunked) -----------------------
     df_news = load_news_range_from_redis(start_time, end_time)
-    if df_news is not None and not df_news.empty:
-        # Add one-hots (expects ticker columns equal to symbols)
-        if all(s in df_news.columns for s in MC.symbols_usdt) or len(set(MC.symbols_usdt).intersection(df_news.columns)) > 0:
-            df_news = N.add_onehot_columns(df_news, MC.symbols_usdt)
-        else:
-            # if no symbol columns in news, still proceed—resampler will fall back to counts only
-            pass
 
-        # If content is missing (because ingest projected only releasedAt), skip embeddings safely
+    if df_news is not None and not df_news.empty:
+
+        # same behaviour as old version: require ticker columns
+        df_news = N.add_onehot_columns(df_news, MC.symbols_usdt)
+
+        # ---- embeddings ----
         if 'content' in df_news.columns and df_news['content'].notna().any():
             tok, mdl, device, max_len = N.load_text_encoder(NC.model_path)
-            df_news['embedding'] = [e for e in N.embed_texts(
-                df_news['content'].to_list(), tok, mdl, device, max_len, NC.pooling, NC.batch_size
-            )]
+            df_news['embedding'] = [
+                e for e in N.embed_texts(
+                    df_news['content'].to_list(),
+                    tok, mdl, device, max_len,
+                    NC.pooling, NC.batch_size
+                )
+            ]
             df_news['news_count'] = 1
+
             if no_news_vec is None:
                 no_news_vec = N.embed_texts(
-                    [NC.no_news_token], tok, mdl, device, max_len, NC.pooling, batch_size=1
+                    [NC.no_news_token], tok, mdl, device,
+                    max_len, NC.pooling, batch_size=1
                 )[0]
-        else:
-            # fallback: no content → no embeddings; use a constant "no-news" vector
-            logging.info("News 'content' missing; attaching counts only and using no-news vector.")
-            df_news['embedding'] = [no_news_vec for _ in range(len(df_news))]
-            df_news['news_count'] = 1
 
+        else:
+            # --- exact old behavior: use static vector ---
+            if no_news_vec is None:
+                logging.warning("No no_news_vec supplied; using zeros.")
+                no_news_vec = np.zeros(NC.embedding_dim, dtype=np.float32)
+
+            df_news["embedding"] = [no_news_vec for _ in range(len(df_news))]
+            df_news["news_count"] = 1
+
+        # ---- resample ----
         news_3m = N.resample_news_3m(
             df_news[['releasedAt', 'embedding', 'news_count'] +
-                    [s for s in MC.symbols_usdt if s in df_news.columns]].copy(),
-            np.asarray(no_news_vec), rule=NC.rule
+                    [s for s in MC.symbols_usdt]].copy(),
+            np.asarray(no_news_vec),
+            rule=NC.rule
         )
+
         merged = F.attach_news(merged, news_3m)
 
-    # Ensure embedding column exists even if no news at all
+    # ----------------------- Ensure embedding column -----------------------
     if 'embedding' not in merged.columns:
+        if no_news_vec is None:
+            no_news_vec = np.zeros(NC.embedding_dim, dtype=np.float32)
+
         merged['embedding'] = [no_news_vec for _ in range(len(merged))]
 
+    # convert stored lists → np.float32 arrays
     merged['embedding'] = merged['embedding'].apply(
-        lambda x: np.asarray(x, dtype=np.float32) if isinstance(x, (list, np.ndarray)) else no_news_vec
+        lambda x: np.asarray(x, dtype=np.float32)
     )
 
-    non_embed_cols = [c for c in merged.columns if c != 'embedding']
-    merged[non_embed_cols] = merged[non_embed_cols].fillna(0)
+    # ----------------------- Fill NA except embeddings -----------------------
+    non_embed = [c for c in merged.columns if c != "embedding"]
+    merged[non_embed] = merged[non_embed].fillna(0.0)
+
     return merged, df_news, no_news_vec
 
 # ----------------------------------------------------------------------
