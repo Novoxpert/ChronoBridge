@@ -3,22 +3,36 @@ from dataclasses import dataclass, field
 import os
 from dotenv import load_dotenv
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# --- Determine base directory ---
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+SIBLING_NEURALFUSIONCORE = os.path.abspath(os.path.join(CURRENT_DIR, "..", "NeuralFusionCore"))
+
+if os.path.exists(SIBLING_NEURALFUSIONCORE):
+    BASE_DIR = SIBLING_NEURALFUSIONCORE
+else:
+    BASE_DIR = CURRENT_DIR
+
+# --- Helper to create absolute paths relative to BASE_DIR ---
 def rel_path(*paths):
-    """Helper: build an absolute path relative to BASE_DIR"""
     return os.path.join(BASE_DIR, *paths)
+
+def rel_current_path(*paths):
+    """Helper: build an absolute path relative to CURRENT_DIR"""
+    return os.path.join(CURRENT_DIR, *paths)
+
 @dataclass
 class Paths:
-    processed_dir: str = rel_path("data/processed")
-    processed_backtesting_dir: str = rel_path("data/processed/backtesting")
-    outputs_dir: str = rel_path("data/outputs")
-    normalizer_pkl: str = rel_path("data/processed/normalizer.pkl")
-    normalizer_backtesting_pkl: str = rel_path("data/processed/backtesting/normalizer.pkl")
-    weights_pt: str = rel_path("apps/NeuralFusionCore/data/outputs/model_weights.pt")
+    processed_dir: str = rel_current_path("data/processed")
+    processed_backtesting_dir: str = rel_current_path("data/processed/backtesting")
+    outputs_dir: str = rel_current_path("data/outputs")
+    normalizer_pkl: str = rel_current_path("data/processed/normalizer.pkl")
+    normalizer_backtesting_pkl: str = rel_current_path("data/processed/backtesting/normalizer.pkl")
+    weights_pt: str = rel_path("data/outputs/model_weights.pt")
 
 @dataclass
 class NewsCfg:
-    model_path: str = rel_path("models/bigbird-2048-final/bigbird-2048-final")
+    model_path: str = rel_current_path("models/bigbird-2048-final/bigbird-2048-final")
     batch_size: int = 4
     max_len: int = 2048
     pooling: str = "mean"
